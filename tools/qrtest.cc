@@ -1,8 +1,8 @@
-// qrtest: checks the whole path from a printed card image to the game's QR reader.
+// qrtest: checks the whole path from a printed card image to the game's QR reader, and the star print fix.
 //
 //   qrtest <modules dir> <otoca-camhook.dll> <card.png>...
 //
-// Loads the game's libcamera.dll, then otoca-camhook on top
+// Loads the game's libcamera.dll and arkkep.dll (unresolved: only its code is needed), then otoca-camhook on top
 // (as spice2x -k does). For each card it finds the QR as otoca-scan does, puts the frame in the shared block,
 // reads it back through libcamera's own LibCameraGetImage export, converts it like arkkep's default_convert
 // (flag 0) and runs the game's QRDecode.dll with arkkep's settings (arkQRInit / FUN_10013480).
@@ -27,8 +27,23 @@ using info_fn = int(__stdcall *)(void *, int);
 using free_fn = void(__stdcall *)(void *);
 using term_fn = int(__stdcall *)();
 using mode_fn = void(__stdcall *)(int *);
+using print_cb = void(__stdcall *)(DWORD, short, short, long, int);
 
 HMODULE g_qr;
+
+// arkkep's print-finished callback on a fake printer with both slots on USB printer 1, printing (0x66).
+// Returns the two slots' statuses after the printer reports success.
+void star_print(unsigned char *ark, DWORD out[2]) {
+    static unsigned char printer[0x48 * 2 + 0x60];
+    std::memset(printer, 0, sizeof printer);
+    for (int i = 0; i < 2; i++) {
+        *reinterpret_cast<short *>(printer + i * 0x48 + 0x1a) = 1;
+        *reinterpret_cast<DWORD *>(printer + i * 0x48 + 0x58) = 0x66;
+    }
+    **reinterpret_cast<unsigned char ***>(ark + 0x422a) = printer;
+    reinterpret_cast<print_cb>(ark + 0x4220)(0, 0, 1, 0, 1);
+    for (int i = 0; i < 2; i++) out[i] = *reinterpret_cast<DWORD *>(printer + i * 0x48 + 0x58);
+}
 
 bool decode(const std::vector<unsigned char> &frame) {
     auto init = reinterpret_cast<init_fn>(GetProcAddress(g_qr, "?QRDecoderInit@@YGHPAUtagBITMAPINFO@@@Z"));
@@ -95,15 +110,24 @@ int wmain(int argc, wchar_t **argv) {
     }
     SetDllDirectoryW(argv[1]);  // the game's DLLs (QRDecode.dll needs pintl.dll from the same folder)
     HMODULE cam = LoadLibraryW(L"libcamera.dll");
+    HMODULE ark = LoadLibraryExW(L"arkkep.dll", nullptr, DONT_RESOLVE_DLL_REFERENCES);
     g_qr = LoadLibraryW(L"QRDecode.dll");
-    if (!cam || !g_qr) {
-        std::printf("load failed: libcamera=%p qr=%p (%lu)\n", cam, g_qr, GetLastError());
+    if (!cam || !ark || !g_qr) {
+        std::printf("load failed: libcamera=%p arkkep=%p qr=%p (%lu)\n", cam, ark, g_qr, GetLastError());
         return 1;
     }
+    auto ark_base = reinterpret_cast<unsigned char *>(ark);
+    DWORD before[2], after[2];
+    star_print(ark_base, before);
     if (!LoadLibraryW(argv[2])) {
         std::printf("load failed: %ls (%lu)\n", argv[2], GetLastError());
         return 1;
     }
+    star_print(ark_base, after);
+    bool star_ok = after[0] == 0 && after[1] == 0;
+    std::printf("star print: slots after printing, arkkep %lx/%lx, fixed %lx/%lx: %s\n", before[0], before[1],
+                after[0], after[1], star_ok ? "OK" : "NG");
+
     auto run = reinterpret_cast<run_fn>(GetProcAddress(cam, "?LibCameraRun@@YA?AW4LIBCAMERA_STATUS@@H@Z"));
     auto get_image =
         reinterpret_cast<image_fn>(GetProcAddress(cam, "?LibCameraGetImage@@YA?AW4LIBCAMERA_STATUS@@HPAX@Z"));
@@ -114,7 +138,7 @@ int wmain(int argc, wchar_t **argv) {
     }
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
-    int failed = 0;
+    int failed = star_ok ? 0 : 1;
     std::vector<unsigned char> seen(frame::kSize);
     for (int i = 3; i < argc; i++) {
         Card card;

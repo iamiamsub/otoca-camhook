@@ -1,4 +1,4 @@
-// otoca-camhook: stands in for the cabinet camera of otoca d'or.
+// otoca-camhook: stands in for the cabinet camera of otoca d'or, and lets star (hologram) cards finish printing.
 //
 // The game reads cards through libcamera.dll (DirectShow, physical USB cameras only). This DLL replaces
 // its exports so LibCameraGetImage hands the game the frame otoca-scan puts in shared memory (frame.h)
@@ -49,6 +49,21 @@ int __cdecl cam_get_image(int, void *buffer) {
     return 0;
 }
 
+// arkkep.dll keeps two printer slots (0x48 bytes each from +0x1a of its printer object: normal cards in 0, star
+// cards in 1). Its print-finished callback (CPUASendImagePrint's) only ever checks slot 0, so a star card never
+// finishes and the print screen sits out arkkep's 1800-poll (60 s) timeout. This one updates every slot on the
+// printer that finished.
+unsigned char **g_printer;  // arkkep's pointer to its printer object
+
+void __stdcall print_done(DWORD err, short, short usb_no, long, int) {
+    unsigned char *printer = *g_printer;
+    if (!printer) return;
+    for (int i = 0; i < 2; i++) {
+        unsigned char *slot = printer + i * 0x48;
+        if (*reinterpret_cast<short *>(slot + 0x1a) == usb_no) *reinterpret_cast<DWORD *>(slot + 0x58) = err;
+    }
+}
+
 bool jump(unsigned char *from, void *to) {
     DWORD old;
     if (!from || !VirtualProtect(from, 5, PAGE_EXECUTE_READWRITE, &old)) return false;
@@ -93,12 +108,33 @@ void hook_camera() {
     log(msg);
 }
 
+void fix_star_print() {
+    auto ark = reinterpret_cast<unsigned char *>(GetModuleHandleW(L"arkkep.dll"));
+    if (!ark) {
+        log("otoca-camhook: arkkep.dll not loaded, star print not fixed\n");
+        return;
+    }
+    // the callback of NCG 2019012900's arkkep.dll; bytes 0xa-0xd are the relocated address of its printer pointer
+    static const unsigned char head[] = {0x55, 0x8b, 0xec, 0x66, 0x8b, 0x55, 0x10, 0x56, 0x8b, 0x35};
+    static const unsigned char tail[] = {0x33, 0xc0, 0x8d, 0x4e, 0x1a, 0x66, 0x39, 0x11, 0x74, 0x0e, 0x40, 0x83,
+                                         0xc1, 0x48, 0x83, 0xf8, 0x01, 0x72, 0xf2, 0x5e, 0x5d, 0xc2, 0x14, 0x00};
+    unsigned char *cb = ark + 0x4220;
+    if (std::memcmp(cb, head, sizeof head) || std::memcmp(cb + 0xe, tail, sizeof tail)) {
+        log("otoca-camhook: unknown arkkep.dll, star print not fixed\n");
+        return;
+    }
+    g_printer = *reinterpret_cast<unsigned char ***>(cb + 0xa);
+    log(jump(cb, reinterpret_cast<void *>(print_done)) ? "otoca-camhook: star print callback fixed\n"
+                                                        : "otoca-camhook: star print fix failed\n");
+}
+
 }  // namespace
 
 BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(self);
         hook_camera();
+        fix_star_print();
     }
     return TRUE;
 }
