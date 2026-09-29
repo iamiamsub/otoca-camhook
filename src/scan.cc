@@ -2,8 +2,10 @@
 //
 // Lists spice's printer_N.png in the chosen folder (the game folder), finds the QR code on the selected card and,
 // while the button (or the space key) is held, puts it in the shared frame otoca-camhook shows the game.
+// Cards no longer wanted can be thrown away (to the Recycle Bin).
 #include <windows.h>
 #include <commctrl.h>
+#include <shellapi.h>
 #include <shobjidl.h>
 #include <wrl/client.h>
 
@@ -20,7 +22,7 @@ namespace {
 
 using Microsoft::WRL::ComPtr;
 
-enum { ID_FOLDER = 1, ID_PICK, ID_LIST, ID_HOLD, ID_STATUS };
+enum { ID_FOLDER = 1, ID_PICK, ID_LIST, ID_HOLD, ID_STATUS, ID_DISCARD };
 enum { TIMER_TICK = 1, TIMER_HOLD };
 constexpr DWORD kHoldMs = 500;  // how long the game keeps seeing the card without a refresh from us
 
@@ -29,7 +31,7 @@ struct File {
     FILETIME written;
 };
 
-HWND g_wnd, g_folder, g_pick, g_list, g_hold, g_status;
+HWND g_wnd, g_folder, g_pick, g_list, g_hold, g_status, g_discard;
 HFONT g_font, g_big_font;
 UINT g_dpi = 96;
 std::wstring g_dir, g_ini;
@@ -109,6 +111,7 @@ void load_selected(const File &f) {
     g_card_written = f.written;
     g_card_read = load_card((g_dir + L"\\" + f.name).c_str(), g_card);
     EnableWindow(g_hold, !g_card.frame.empty());
+    EnableWindow(g_discard, TRUE);
     update_status();
     InvalidateRect(g_wnd, &g_preview, FALSE);
 }
@@ -118,6 +121,7 @@ void clear_selected() {
     g_card = Card{};
     g_card_read = false;
     EnableWindow(g_hold, FALSE);
+    EnableWindow(g_discard, FALSE);
     update_status();
     InvalidateRect(g_wnd, &g_preview, FALSE);
 }
@@ -182,6 +186,30 @@ void set_dir(const std::wstring &dir) {
     refresh_list();
 }
 
+// Sends the selected card to the Recycle Bin (Windows asks before deleting anything it cannot recycle) and
+// selects the one that takes its place in the list.
+void discard_selected() {
+    int sel = static_cast<int>(SendMessageW(g_list, LB_GETCURSEL, 0, 0));
+    if (sel < 0 || sel >= static_cast<int>(g_files.size())) return;
+    stop_hold();
+    ComPtr<IFileOperation> op;
+    ComPtr<IShellItem> item;
+    if (FAILED(CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&op))) ||
+        FAILED(SHCreateItemFromParsingName((g_dir + L"\\" + g_files[sel].name).c_str(), nullptr,
+                                           IID_PPV_ARGS(&item))) ||
+        FAILED(op->SetOwnerWindow(g_wnd)) ||
+        FAILED(op->SetOperationFlags(FOF_ALLOWUNDO | FOFX_RECYCLEONDELETE | FOF_SILENT)) ||
+        FAILED(op->DeleteItem(item.Get(), nullptr)) || FAILED(op->PerformOperations()))
+        return;
+    refresh_list();
+    const int n = static_cast<int>(g_files.size());
+    if (g_card_name.empty() && n > 0) {
+        sel = std::min(sel, n - 1);
+        SendMessageW(g_list, LB_SETCURSEL, sel, 0);
+        load_selected(g_files[sel]);
+    }
+}
+
 void pick_folder() {
     ComPtr<IFileOpenDialog> dlg;
     if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return;
@@ -236,7 +264,7 @@ void make_fonts() {
     ncm.lfMessageFont.lfHeight = ncm.lfMessageFont.lfHeight * 3 / 2;
     ncm.lfMessageFont.lfWeight = FW_BOLD;
     g_big_font = CreateFontIndirectW(&ncm.lfMessageFont);
-    for (HWND h : {g_folder, g_pick, g_list, g_status})
+    for (HWND h : {g_folder, g_pick, g_list, g_status, g_discard})
         SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(g_font), TRUE);
     SendMessageW(g_hold, WM_SETFONT, reinterpret_cast<WPARAM>(g_big_font), TRUE);
 }
@@ -251,7 +279,8 @@ void layout() {
     const int bottom = status_y - gap;
     MoveWindow(g_folder, m, m, w - 2 * m - gap - pick, row, TRUE);
     MoveWindow(g_pick, w - m - pick, m, pick, row, TRUE);
-    MoveWindow(g_list, m, top, list, bottom - top, TRUE);
+    MoveWindow(g_list, m, top, list, bottom - top - row - gap, TRUE);
+    MoveWindow(g_discard, m, bottom - row, list, row, TRUE);
     MoveWindow(g_status, m, status_y, w - 2 * m, status, TRUE);
     MoveWindow(g_hold, m, hold_y, w - 2 * m, hold, TRUE);
     g_preview = {m + list + gap, top, w - m, bottom};
@@ -280,6 +309,8 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_list = child(L"LISTBOX", L"", LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP, ID_LIST,
                        WS_EX_CLIENTEDGE);
         g_status = child(L"STATIC", L"", SS_LEFT | SS_NOPREFIX, ID_STATUS);
+        g_discard = child(L"BUTTON", L"このカードを捨てる（ごみ箱へ）", BS_PUSHBUTTON | WS_TABSTOP | WS_DISABLED,
+                          ID_DISCARD);
         g_hold = child(L"BUTTON", L"", BS_PUSHBUTTON | WS_TABSTOP | WS_DISABLED, ID_HOLD);
         SetWindowSubclass(g_hold, hold_proc, 0, 0);
         make_fonts();
@@ -309,6 +340,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_COMMAND:
         if (LOWORD(wp) == ID_PICK && HIWORD(wp) == BN_CLICKED) pick_folder();
+        if (LOWORD(wp) == ID_DISCARD && HIWORD(wp) == BN_CLICKED) discard_selected();
         if (LOWORD(wp) == ID_LIST && HIWORD(wp) == LBN_SELCHANGE) {
             int sel = static_cast<int>(SendMessageW(g_list, LB_GETCURSEL, 0, 0));
             if (sel >= 0 && sel < static_cast<int>(g_files.size())) load_selected(g_files[sel]);
@@ -395,6 +427,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
                 stop_hold();
             else if (!(msg.lParam & (1 << 30)))  // not auto-repeat
                 start_hold();
+            continue;
+        }
+        if (msg.message == WM_KEYDOWN && msg.wParam == VK_DELETE && msg.hwnd == g_list) {
+            discard_selected();
             continue;
         }
         if (!IsDialogMessageW(g_wnd, &msg)) {

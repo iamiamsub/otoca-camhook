@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.31)
 
-project(otoca-camhook VERSION 0.2.0 LANGUAGES CXX RC)
+project(otoca-camhook VERSION 0.3.0 LANGUAGES CXX RC)
 
 set(CAMHOOK_VERSION "${PROJECT_VERSION}")
 
