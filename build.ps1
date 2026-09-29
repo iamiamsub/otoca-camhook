@@ -17,6 +17,6 @@ if ($LASTEXITCODE -ne 0) { throw "configure failed ($LASTEXITCODE)" }
 cmake --build build
 if ($LASTEXITCODE -ne 0) { throw "build failed ($LASTEXITCODE)" }
 
-Get-Item build\otoca-camhook.dll, build\qrtest.exe | ForEach-Object {
+Get-Item build\otoca-camhook.dll, build\otoca-scan.exe, build\qrtest.exe | ForEach-Object {
     Write-Output "BUILT: $($_.FullName) ($([math]::Round($_.Length/1kb)) KB)"
 }

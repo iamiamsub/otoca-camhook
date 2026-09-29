@@ -1,4 +1,4 @@
-// Version information for @RC_NAME@.dll (configured by CMakeLists.txt).
+// Version information for @RC_NAME@.@RC_EXT@ (configured by CMakeLists.txt).
 #include <winver.h>
 
 VS_VERSION_INFO VERSIONINFO
@@ -7,7 +7,7 @@ VS_VERSION_INFO VERSIONINFO
  FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
  FILEFLAGS 0
  FILEOS VOS_NT_WINDOWS32
- FILETYPE VFT_DLL
+ FILETYPE @RC_TYPE@
  FILESUBTYPE VFT2_UNKNOWN
 BEGIN
     BLOCK "StringFileInfo"
@@ -18,7 +18,7 @@ BEGIN
             VALUE "FileDescription", "@RC_DESCRIPTION@"
             VALUE "FileVersion", "@CAMHOOK_VERSION@"
             VALUE "InternalName", "@RC_NAME@"
-            VALUE "OriginalFilename", "@RC_NAME@.dll"
+            VALUE "OriginalFilename", "@RC_NAME@.@RC_EXT@"
             VALUE "ProductName", "otoca-camhook"
             VALUE "ProductVersion", "@CAMHOOK_VERSION@"
         END
