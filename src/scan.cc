@@ -135,9 +135,13 @@ std::vector<File> list_files() {
     do out.push_back({fd.cFileName, fd.ftLastWriteTime});
     while (FindNextFileW(h, &fd));
     FindClose(h);
-    // spice numbers its prints in order: newest first
+    // newest first. Not by number alone: spice takes the lowest free number, so a print after a card was
+    // thrown away fills the gap.
     auto number = [](const File &f) { return _wtoi(f.name.c_str() + 8); };  // after "printer_"
-    std::sort(out.begin(), out.end(), [&](const File &a, const File &b) { return number(a) > number(b); });
+    std::sort(out.begin(), out.end(), [&](const File &a, const File &b) {
+        LONG t = CompareFileTime(&a.written, &b.written);
+        return t ? t > 0 : number(a) > number(b);
+    });
     return out;
 }
 
