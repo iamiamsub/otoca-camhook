@@ -2,7 +2,7 @@
 //
 // Lists spice's printer_N.png in the chosen folder (the game folder), finds the QR code on the selected card and,
 // while the button (or the space key) is held, puts it in the shared frame otoca-camhook shows the game.
-// Cards no longer wanted can be thrown away (to the Recycle Bin).
+// Cards no longer wanted can be thrown away (to the Recycle Bin). The window is in Japanese or English.
 #include <windows.h>
 #include <commctrl.h>
 #include <shellapi.h>
@@ -22,7 +22,7 @@ namespace {
 
 using Microsoft::WRL::ComPtr;
 
-enum { ID_FOLDER = 1, ID_PICK, ID_LIST, ID_HOLD, ID_STATUS, ID_DISCARD };
+enum { ID_FOLDER = 1, ID_PICK, ID_LIST, ID_HOLD, ID_STATUS, ID_DISCARD, ID_LANG };
 enum { TIMER_TICK = 1, TIMER_HOLD };
 constexpr DWORD kHoldMs = 500;  // how long the game keeps seeing the card without a refresh from us
 
@@ -31,7 +31,7 @@ struct File {
     FILETIME written;
 };
 
-HWND g_wnd, g_folder, g_pick, g_list, g_hold, g_status, g_discard;
+HWND g_wnd, g_folder, g_pick, g_lang_button, g_list, g_hold, g_status, g_discard;
 HFONT g_font, g_big_font;
 UINT g_dpi = 96;
 std::wstring g_dir, g_ini;
@@ -47,6 +47,65 @@ int g_ticks;
 
 int px(int dip) { return MulDiv(dip, g_dpi, 96); }
 
+// Window texts in Japanese and English. %s is a card's file name, %lu a number of seconds.
+enum Text {
+    T_TITLE, T_FOLDER, T_LANG, T_DISCARD, T_HOLD, T_HOLDING, T_PICK_TITLE, T_NO_DIR, T_NO_FILES, T_SELECT,
+    T_UNREADABLE, T_NO_QR, T_SHOWING, T_READY, T_NO_SHARED, T_CAM_NEVER, T_CAM_NOW, T_CAM_AGO, T_COUNT
+};
+enum Lang { JA, EN };
+const wchar_t *const kText[2][T_COUNT] = {
+    {
+        L"otoca-scan - カードをかざす",
+        L"フォルダ…",
+        L"English",  // the button names the other language
+        L"このカードを捨てる（ごみ箱へ）",
+        L"押している間 カードをかざす",
+        L"かざしています…",
+        L"printer_N.png があるフォルダ（ゲームのフォルダ）",
+        L"「フォルダ…」で、spice が printer_N.png を書き出すフォルダ（ゲームのフォルダ）を選んでください",
+        L"このフォルダには printer_N.png がありません",
+        L"読ませるカードを選んでください",
+        L"%s: 画像を読めません",
+        L"%s: QR コードが見つかりません",
+        L"%s をカメラにかざしています",
+        L"%s: ボタン（またはスペースキー）を押している間だけカメラに映ります",
+        L"共有メモリを開けません",
+        L"ゲームのカメラ: まだ読み取りがありません（spice の -k に otoca-camhook.dll が要ります）",
+        L"ゲームのカメラ: 読み取り中",
+        L"ゲームのカメラ: 最後の読み取りは %lu 秒前",
+    },
+    {
+        L"otoca-scan - hold a card to the camera",
+        L"Folder…",
+        L"日本語",
+        L"Throw this card away (Recycle Bin)",
+        L"Hold to show the card",
+        L"Showing the card…",
+        L"Folder with printer_N.png (the game folder)",
+        L"Use \"Folder…\" to choose the folder spice writes printer_N.png to (the game folder)",
+        L"No printer_N.png in this folder",
+        L"Select the card to scan",
+        L"%s: cannot read the image",
+        L"%s: no QR code found",
+        L"Showing %s to the camera",
+        L"%s: shown to the camera only while the button (or the space key) is held",
+        L"Cannot open the shared memory",
+        L"Game camera: not read yet (spice needs otoca-camhook.dll in -k)",
+        L"Game camera: reading",
+        L"Game camera: last read %lu s ago",
+    },
+};
+Lang g_lang;
+
+const wchar_t *tr(Text t) { return kText[g_lang][t]; }
+
+template <typename... Args>
+std::wstring trf(Text t, Args... args) {
+    wchar_t buf[512];
+    swprintf_s(buf, tr(t), args...);
+    return buf;
+}
+
 void set_text(HWND h, const std::wstring &text) {
     wchar_t now[512];
     GetWindowTextW(h, now, 512);
@@ -54,36 +113,45 @@ void set_text(HWND h, const std::wstring &text) {
 }
 
 void update_status() {
+    const wchar_t *name = g_card_name.c_str();
     std::wstring s;
     if (g_dir.empty())
-        s = L"「フォルダ…」で、spice が printer_N.png を書き出すフォルダ（ゲームのフォルダ）を選んでください";
+        s = tr(T_NO_DIR);
     else if (g_card_name.empty())
-        s = g_files.empty() ? L"このフォルダには printer_N.png がありません" : L"読ませるカードを選んでください";
+        s = tr(g_files.empty() ? T_NO_FILES : T_SELECT);
     else if (!g_card_read)
-        s = g_card_name + L": 画像を読めません";
+        s = trf(T_UNREADABLE, name);
     else if (g_card.frame.empty())
-        s = g_card_name + L": QR コードが見つかりません";
-    else if (g_holding)
-        s = g_card_name + L" をカメラにかざしています";
+        s = trf(T_NO_QR, name);
     else
-        s = g_card_name + L": ボタン（またはスペースキー）を押している間だけカメラに映ります";
+        s = trf(g_holding ? T_SHOWING : T_READY, name);
 
     s += L"\r\n";
     if (!g_shared) {
-        s += L"共有メモリを開けません";
+        s += tr(T_NO_SHARED);
     } else if (!g_shared->last_read) {
-        s += L"ゲームのカメラ: まだ読み取りがありません（spice の -k に otoca-camhook.dll が要ります）";
+        s += tr(T_CAM_NEVER);
     } else {
         DWORD age = GetTickCount() - g_shared->last_read;
-        wchar_t t[96];
-        if (age < 1000)
-            swprintf_s(t, L"ゲームのカメラ: 読み取り中");
-        else
-            swprintf_s(t, L"ゲームのカメラ: 最後の読み取りは %lu 秒前", age / 1000);
-        s += t;
+        s += age < 1000 ? tr(T_CAM_NOW) : trf(T_CAM_AGO, age / 1000);
     }
     set_text(g_status, s);
-    set_text(g_hold, g_holding ? L"かざしています…" : L"押している間 カードをかざす");
+    set_text(g_hold, tr(g_holding ? T_HOLDING : T_HOLD));
+}
+
+// Puts the texts of the current language on the window.
+void apply_language() {
+    SetWindowTextW(g_wnd, tr(T_TITLE));
+    SetWindowTextW(g_pick, tr(T_FOLDER));
+    SetWindowTextW(g_lang_button, tr(T_LANG));
+    SetWindowTextW(g_discard, tr(T_DISCARD));
+    update_status();
+}
+
+void toggle_language() {
+    g_lang = g_lang == JA ? EN : JA;
+    WritePrivateProfileStringW(L"otoca-scan", L"lang", g_lang == JA ? L"ja" : L"en", g_ini.c_str());
+    apply_language();
 }
 
 void start_hold() {
@@ -220,7 +288,7 @@ void pick_folder() {
     DWORD opt = 0;
     dlg->GetOptions(&opt);
     dlg->SetOptions(opt | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
-    dlg->SetTitle(L"printer_N.png があるフォルダ（ゲームのフォルダ）");
+    dlg->SetTitle(tr(T_PICK_TITLE));
     ComPtr<IShellItem> cur, item;
     if (!g_dir.empty() && SUCCEEDED(SHCreateItemFromParsingName(g_dir.c_str(), nullptr, IID_PPV_ARGS(&cur))))
         dlg->SetFolder(cur.Get());
@@ -268,7 +336,7 @@ void make_fonts() {
     ncm.lfMessageFont.lfHeight = ncm.lfMessageFont.lfHeight * 3 / 2;
     ncm.lfMessageFont.lfWeight = FW_BOLD;
     g_big_font = CreateFontIndirectW(&ncm.lfMessageFont);
-    for (HWND h : {g_folder, g_pick, g_list, g_status, g_discard})
+    for (HWND h : {g_folder, g_pick, g_lang_button, g_list, g_status, g_discard})
         SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(g_font), TRUE);
     SendMessageW(g_hold, WM_SETFONT, reinterpret_cast<WPARAM>(g_big_font), TRUE);
 }
@@ -281,8 +349,9 @@ void layout() {
     const int w = c.right, h = c.bottom;
     const int top = m + row + gap, hold_y = h - m - hold, status_y = hold_y - gap - status;
     const int bottom = status_y - gap;
-    MoveWindow(g_folder, m, m, w - 2 * m - gap - pick, row, TRUE);
-    MoveWindow(g_pick, w - m - pick, m, pick, row, TRUE);
+    MoveWindow(g_folder, m, m, w - 2 * m - 2 * (gap + pick), row, TRUE);
+    MoveWindow(g_pick, w - m - 2 * pick - gap, m, pick, row, TRUE);
+    MoveWindow(g_lang_button, w - m - pick, m, pick, row, TRUE);
     MoveWindow(g_list, m, top, list, bottom - top - row - gap, TRUE);
     MoveWindow(g_discard, m, bottom - row, list, row, TRUE);
     MoveWindow(g_status, m, status_y, w - 2 * m, status, TRUE);
@@ -309,19 +378,19 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), inst, nullptr);
         };
         g_folder = child(L"EDIT", L"", ES_READONLY | ES_AUTOHSCROLL | WS_TABSTOP, ID_FOLDER, WS_EX_CLIENTEDGE);
-        g_pick = child(L"BUTTON", L"フォルダ…", BS_PUSHBUTTON | WS_TABSTOP, ID_PICK);
+        g_pick = child(L"BUTTON", L"", BS_PUSHBUTTON | WS_TABSTOP, ID_PICK);
+        g_lang_button = child(L"BUTTON", L"", BS_PUSHBUTTON | WS_TABSTOP, ID_LANG);
         g_list = child(L"LISTBOX", L"", LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP, ID_LIST,
                        WS_EX_CLIENTEDGE);
         g_status = child(L"STATIC", L"", SS_LEFT | SS_NOPREFIX, ID_STATUS);
-        g_discard = child(L"BUTTON", L"このカードを捨てる（ごみ箱へ）", BS_PUSHBUTTON | WS_TABSTOP | WS_DISABLED,
-                          ID_DISCARD);
+        g_discard = child(L"BUTTON", L"", BS_PUSHBUTTON | WS_TABSTOP | WS_DISABLED, ID_DISCARD);
         g_hold = child(L"BUTTON", L"", BS_PUSHBUTTON | WS_TABSTOP | WS_DISABLED, ID_HOLD);
         SetWindowSubclass(g_hold, hold_proc, 0, 0);
         make_fonts();
         layout();
         SetWindowTextW(g_folder, g_dir.c_str());
         refresh_list();
-        update_status();
+        apply_language();
         SetTimer(hwnd, TIMER_TICK, 250, nullptr);
         return 0;
     }
@@ -345,6 +414,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_COMMAND:
         if (LOWORD(wp) == ID_PICK && HIWORD(wp) == BN_CLICKED) pick_folder();
         if (LOWORD(wp) == ID_DISCARD && HIWORD(wp) == BN_CLICKED) discard_selected();
+        if (LOWORD(wp) == ID_LANG && HIWORD(wp) == BN_CLICKED) toggle_language();
         if (LOWORD(wp) == ID_LIST && HIWORD(wp) == LBN_SELCHANGE) {
             int sel = static_cast<int>(SendMessageW(g_list, LB_GETCURSEL, 0, 0));
             if (sel >= 0 && sel < static_cast<int>(g_files.size())) load_selected(g_files[sel]);
@@ -406,6 +476,13 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     wchar_t dir[MAX_PATH] = L"";
     GetPrivateProfileStringW(L"otoca-scan", L"folder", L"", dir, MAX_PATH, g_ini.c_str());
     g_dir = dir;
+    // language: the saved choice, otherwise Japanese on a Japanese Windows and English elsewhere
+    wchar_t lang[8] = L"";
+    GetPrivateProfileStringW(L"otoca-scan", L"lang", L"", lang, 8, g_ini.c_str());
+    if (!wcscmp(lang, L"ja") || !wcscmp(lang, L"en"))
+        g_lang = !wcscmp(lang, L"ja") ? JA : EN;
+    else
+        g_lang = PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_JAPANESE ? JA : EN;
 
     WNDCLASSEXW wc{sizeof wc};
     wc.lpfnWndProc = wnd_proc;
@@ -418,7 +495,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     g_dpi = GetDpiForSystem();
     RECT r{0, 0, px(780), px(620)};
     AdjustWindowRectExForDpi(&r, WS_OVERLAPPEDWINDOW, FALSE, 0, g_dpi);
-    CreateWindowExW(WS_EX_CONTROLPARENT, L"otoca-scan", L"otoca-scan - カードをかざす", WS_OVERLAPPEDWINDOW,
+    CreateWindowExW(WS_EX_CONTROLPARENT, L"otoca-scan", tr(T_TITLE), WS_OVERLAPPEDWINDOW,
                     CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, nullptr, nullptr, inst,
                     nullptr);
     ShowWindow(g_wnd, show);

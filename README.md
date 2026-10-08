@@ -24,21 +24,25 @@ Example placement:
    spicecfg calls it "SDVX Printer Output Path", but it applies to otoca as well.
    Images cannot be written if the folder does not exist.
    Without it, `printer_N.png` is written to the game folder.
-3. Start `otoca-scan.exe` and use "フォルダ…" (Folder) to pick the folder `printer_N.png` is written to.
+3. Start `otoca-scan.exe` and use "Folder…" to pick the folder `printer_N.png` is written to.
    The chosen folder is saved in `otoca-scan.ini` (next to the exe).
 4. Select the card to scan from the list.
    The red frame shows where the QR code was found.
    The newest prints are at the top, and new prints are added automatically.
-5. On the game's scan screen, keep "押している間 カードをかざす" (hold the card while pressed) pressed (or hold the space key).
+5. On the game's scan screen, keep "Hold to show the card" pressed (or hold the space key).
    The card is in front of the camera only while it is pressed; on release the camera shows nothing again.
-6. Throw away cards you no longer need with "このカードを捨てる（ごみ箱へ）" (throw this card away, to the Recycle Bin), or press Delete in the list.
+6. Throw away cards you no longer need with "Throw this card away (Recycle Bin)", or press Delete in the list.
    The image goes to the Recycle Bin and the next card is selected.
    Restoring it from the Recycle Bin brings it back to the list.
    spice uses the lowest free number, so the next print may be written under a number that was thrown away.
    The list is sorted by modification time, so the new print still comes first in that case.
 
-The lower line of the status display ("ゲームのカメラ", the game's camera) shows when the game last read the camera.
+The lower line of the status display ("Game camera") shows when the game last read the camera.
 If it has never been read, the DLL is not loaded.
+
+The window is in English or Japanese, and the button at the top right switches between them.
+The choice is saved in `otoca-scan.ini`.
+On the first start, the window is in Japanese if the Windows display language is Japanese, and in English otherwise.
 
 ## The star card print wait
 
