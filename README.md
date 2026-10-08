@@ -1,54 +1,68 @@
 # otoca-camhook
 
-otoca d'or（NCG）の筐体カメラの代わり。印刷したカードの画像を、カメラ映像としてゲームに渡す。
-あわせて、spice2x でキラカード（ホロ）を印刷したあと 60 秒待たされる件を直す。
+English | [日本語](README-ja.md)
 
-ゲームはカードの QR を `libcamera.dll`（DirectShow、実物の USB カメラだけ）で読む。spice2x の
-`-otocacamhook` はカメラ関数を「何も映さない」ものに差し替えるだけなので、カードは読めない。
-この DLL は同じ関数を差し替え、`otoca-scan` が共有メモリに置いた映像を `LibCameraGetImage` で返す。
+Stands in for the cabinet camera of otoca d'or (NCG): printed card images are handed to the game as the camera frame.
+It also fixes the 60-second wait after printing a star (hologram) card on spice2x.
 
-## 使い方
+The game reads the QR code on a card through `libcamera.dll` (DirectShow, physical USB cameras only).
+spice2x's `-otocacamhook` only replaces the camera functions with ones that show nothing, so cards cannot be read with it.
+This DLL replaces the same functions, and `LibCameraGetImage` returns the frame that `otoca-scan` puts in shared memory.
 
-配置の例: `otoca-camhook.dll` はゲームの `modules` フォルダ、`otoca-scan.exe` はゲームのフォルダ、
-印刷画像はゲームのフォルダの `printer` フォルダ。
+## Usage
 
-1. spice2x の起動オプションに `-k <ゲームのフォルダ>\modules\otoca-camhook.dll` を足す。`-otocacamhook` は
-   付けたままでよい（spice は -k の DLL を自分の差し替えの後に読むので、こちらが勝つ）。
-2. 印刷画像をまとめるなら、先に `printer` フォルダを作り、spice の `-printerpath <ゲームのフォルダ>\printer` を足す
-   （spicecfg では「SDVX Printer Output Path」。otoca にも効く。フォルダが無いと書き出せない）。
-   指定しなければ `printer_N.png` はゲームのフォルダに書き出される。
-3. `otoca-scan.exe` を起動し、「フォルダ…」で `printer_N.png` が書き出されるフォルダを選ぶ。
-   選んだフォルダは `otoca-scan.ini`（exe の隣）に残る。
-4. 一覧から読ませるカードを選ぶ。赤枠が見つかった QR。一覧は新しい印刷が上で、印刷すると自動で増える。
-5. ゲームのスキャン画面で「押している間 カードをかざす」を押し続ける（スペースキーでもよい）。
-   押している間だけカメラに映り、離すと何も映らなくなる。
-6. 要らなくなったカードは「このカードを捨てる（ごみ箱へ）」（一覧で Delete キーでもよい）。画像をごみ箱へ移し、
-   次のカードを選ぶ。ごみ箱から戻せば一覧に戻る。spice は空いた番号から使うので、次の印刷は捨てた番号で
-   書き出されることがある（一覧は更新時刻の順なので、それでも上に来る）。
+Example placement:
 
-下の行の「ゲームのカメラ」は、ゲームが最後にカメラを読んだ時刻。一度も読まれていなければ DLL が読み込まれていない。
+- `otoca-camhook.dll`: the game's `modules` folder
+- `otoca-scan.exe`: the game folder
+- Printed images: a `printer` folder inside the game folder
 
-## キラカードの印刷待ち
+1. Add `-k <game folder>\modules\otoca-camhook.dll` to the spice2x launch options.
+   `-otocacamhook` can stay on.
+   spice loads -k DLLs after its own hooks, so this DLL's replacements take effect.
+2. To keep the printed images in one place, create the `printer` folder first and add spice's `-printerpath <game folder>\printer`.
+   spicecfg calls it "SDVX Printer Output Path", but it applies to otoca as well.
+   Images cannot be written if the folder does not exist.
+   Without it, `printer_N.png` is written to the game folder.
+3. Start `otoca-scan.exe` and use "フォルダ…" (Folder) to pick the folder `printer_N.png` is written to.
+   The chosen folder is saved in `otoca-scan.ini` (next to the exe).
+4. Select the card to scan from the list.
+   The red frame shows where the QR code was found.
+   The newest prints are at the top, and new prints are added automatically.
+5. On the game's scan screen, keep "押している間 カードをかざす" (hold the card while pressed) pressed (or hold the space key).
+   The card is in front of the camera only while it is pressed; on release the camera shows nothing again.
+6. Throw away cards you no longer need with "このカードを捨てる（ごみ箱へ）" (throw this card away, to the Recycle Bin), or press Delete in the list.
+   The image goes to the Recycle Bin and the next card is selected.
+   Restoring it from the Recycle Bin brings it back to the list.
+   spice uses the lowest free number, so the next print may be written under a number that was thrown away.
+   The list is sorted by modification time, so the new print still comes first in that case.
 
-arkkep.dll はプリンターを 2 枠持ち（通常カードは 0、キラは 1）、印刷完了のコールバックが 0 枠しか見ない。
-spice2x はキラの印刷を通すように arkkep を直しているが、完了は 1 枠に届かないので、印刷画面は arkkep の
-打ち切り（1800 回の問い合わせ ≒ 60 秒）まで進まない。この DLL はコールバックを、同じプリンターの枠を
-すべて完了にするものに差し替える（spice の印刷完了は 4 秒後なので、キラも 4 秒で進む）。
-NCG 2019012900 の arkkep.dll と中身が一致するときだけ差し替え、ログに `star print callback fixed` と出る。
+The lower line of the status display ("ゲームのカメラ", the game's camera) shows when the game last read the camera.
+If it has never been read, the DLL is not loaded.
 
-## ビルド
+## The star card print wait
 
-`build.ps1`（Visual Studio、32 ビット）。出力は `build\otoca-camhook.dll`、`build\otoca-scan.exe`、`build\qrtest.exe`。
+arkkep.dll keeps two printer slots (normal cards in slot 0, star cards in slot 1), but its print-finished callback only checks slot 0.
+spice2x patches arkkep so star cards are printed, but the completion never reaches slot 1, so the print screen does not move on until arkkep gives up (1800 polls, about 60 seconds).
+This DLL replaces that callback and marks every slot on the same printer as finished.
+spice reports a print as finished after 4 seconds, so star cards also move on after 4 seconds.
+The callback is replaced only when the bytes match NCG 2019012900's arkkep.dll, and the log then shows `star print callback fixed`.
 
-## 確かめ方
+## Building
+
+Build with `build.ps1` (Visual Studio, 32-bit).
+The outputs are `build\otoca-camhook.dll`, `build\otoca-scan.exe` and `build\qrtest.exe`.
+
+## Testing
 
 ```
-build\qrtest.exe <ゲームの modules フォルダ> <otoca-camhook.dll の絶対パス> <printer_N.png>...
+build\qrtest.exe <game modules folder> <absolute path of otoca-camhook.dll> <printer_N.png>...
 ```
 
-ゲームの `libcamera.dll` と `arkkep.dll` を読み込んだ上にこの DLL を読み込む。
+qrtest loads the game's `libcamera.dll` and `arkkep.dll`, loads this DLL on top, and checks the following.
 
-- **キラ印刷:** 元の arkkep では 1 枠が印刷中のまま残り、差し替え後は両方が完了になることを確かめる。
-- **カード:** 各カードは otoca-scan と同じ方法で QR を切り出して共有メモリに置く。`LibCameraGetImage` の映像を
-  arkkep と同じ変換（`default_convert`）にかけ、ゲームの `QRDecode.dll` で読む。`OK` なら arkkep が受け付ける QR。
-- **離したあと:** 映像が白に戻ることも確かめる。
+- **Star print:** with the original arkkep, slot 1 stays busy; after the replacement, both slots are finished.
+- **Cards:** the QR code is cut out of each card the same way otoca-scan does and put in shared memory.
+  The frame from `LibCameraGetImage` goes through the same conversion as arkkep (`default_convert`) and is read with the game's `QRDecode.dll`.
+  `OK` means arkkep accepts the QR code.
+- **After release:** the frame goes back to white.
